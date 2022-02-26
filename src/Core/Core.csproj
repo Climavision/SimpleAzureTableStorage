@@ -6,6 +6,12 @@
     <Nullable>enable</Nullable>
     <AssemblyName>SimpleAzureTableStorage.$(MSBuildProjectName)</AssemblyName>
     <RootNamespace>SimpleAzureTableStorage.$(MSBuildProjectName.Replace(" ", "_"))</RootNamespace>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <Product>Simple Azure Table Storage</Product>
+    <Description>
+      TBD
+    </Description>
+    <PackageTags>Azure Table Storage Simple POCO Easy Session Async</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>
