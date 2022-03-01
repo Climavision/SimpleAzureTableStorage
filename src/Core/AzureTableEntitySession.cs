@@ -57,8 +57,12 @@ public class AzureTableEntitySession : IEntitySession
     public async Task<T?> Load<T, TKeyValue>(Expression<Func<T, TKeyValue>> keyProp, TKeyValue value, CancellationToken token = default) where T : class => 
         await GetEntityService<T>().Load(keyProp, value, token);
 
-    public Task<T?> LoadAll<T, TPartitionValue>(Expression<Func<T, TPartitionValue>> partitionProp, TPartitionValue value, CancellationToken token = default) where T : class => 
-        throw new NotImplementedException();
+    public IAsyncEnumerable<T> LoadAll<T, TPartitionValue>(Expression<Func<T, TPartitionValue>> partitionProp, TPartitionValue value, CancellationToken token = default) where T : class
+    {
+        var expression = new PropertyKeyStrategy<T, TPartitionValue>(partitionProp, false);
+
+        return Query<T>($"PartitionKey eq '{expression.BuildKey(value)}'");
+    }
 
     private TableEntityService<T> GetEntityService<T>() where T : class
     {

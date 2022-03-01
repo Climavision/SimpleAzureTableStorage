@@ -12,7 +12,7 @@ public interface IEntitySession
     
     Task<T?> Load<T>(string id, string? rowKeyValue = null, CancellationToken token = default) where T : class;
     Task<T?> Load<T, TKeyValue>(Expression<Func<T, TKeyValue>> keyProp, TKeyValue value, CancellationToken token = default) where T : class;
-    Task<T?> LoadAll<T, TPartitionValue>(Expression<Func<T, TPartitionValue>> partitionProp, TPartitionValue value, CancellationToken token = default) where T : class;
+    IAsyncEnumerable<T> LoadAll<T, TPartitionValue>(Expression<Func<T, TPartitionValue>> partitionProp, TPartitionValue value, CancellationToken token = default) where T : class;
     Task<T?> Load<T, TKeyValue, TPartitionValue>(Expression<Func<T, TKeyValue>> prop, TKeyValue keyValue, Expression<Func<T, TPartitionValue>> partitionProp, TPartitionValue partitionValue, CancellationToken token = default) where T : class;
     Task<Dictionary<string, T?>> Load<T>(IEnumerable<string> ids, string? rowKeyValue = null, CancellationToken token = default) where T : class;
     IAsyncEnumerable<T> Query<T>(string query);
