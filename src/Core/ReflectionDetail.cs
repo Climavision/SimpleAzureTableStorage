@@ -1,32 +1,44 @@
-﻿using System.Reflection;
+﻿using System.Linq.Expressions;
+using System.Reflection;
 using Humanizer;
+using SimpleAzureTableStorage.Core.Functions;
 
 namespace SimpleAzureTableStorage.Core;
 
 public class ReflectionDetail<T> : IReflectionDetail
 {
-    private readonly string _schemaName;
+    private readonly IStoreConfiguration _configuration;
 
-    public ReflectionDetail(string schemaName)
+    public ReflectionDetail(IStoreConfiguration configuration)
     {
-        _schemaName = schemaName;
+        _configuration = configuration;
         Type = typeof(T);
         SingularName = Type.Name;
         PluralName = Type.Name.Pluralize();
         Properties = Type.GetProperties();
         Constructors = Type.GetConstructors().ToDictionary(x => x, x => x.GetParameters());
-        TableName = $"{_schemaName}{PluralName}";
+        TableName = $"{configuration.Schema}{PluralName}";
+
+        var idProperty = Properties.FirstOrDefault(x => x.Name.In("Id", $"{SingularName}Id"));
+
+        if (idProperty == null) return;
+
+        var param = Expression.Parameter(Type, SingularName);
+        var propertyExpression = Expression.Property(param, idProperty);
+        var expression = Expression.Lambda(propertyExpression, param);
+        var strategyType = typeof(PropertyKeyStrategy<,>).MakeGenericType(Type, idProperty.PropertyType);
+
+        IdKeyStrategy = Activator.CreateInstance(strategyType, expression, true) as IKeyStrategy<T>;
     }
 
+    public IKeyStrategy<T>? IdKeyStrategy { get; }
+
     public Type Type { get; }
+    public string TableName { get; }
     public string SingularName { get; }
     public string PluralName { get; }
-    public string TableName { get; }
     public PropertyInfo[] Properties { get; }
     public Dictionary<ConstructorInfo, ParameterInfo[]> Constructors { get; }
-
-    public string GenerateRowKey(string id) =>
-        $"{SingularName}__{id}";
 
     public object? GetValueFromObject(object? value)
     {
@@ -37,13 +49,21 @@ public class ReflectionDetail<T> : IReflectionDetail
         };
     }
 
+    public static object ReadValue(object value, Type? type) =>
+        value switch
+        {
+            DateTimeOffset offset => offset.DateTime,
+            string stringValue when type?.IsEnum ?? false => Enum.Parse(type, stringValue),
+            _ => value
+        };
+
     public T LoadFrom(IDictionary<string, object> valueSource)
     {
         (ConstructorInfo Constructor, object?[] Parameters)? ctr = null;
         var values = valueSource.ToDictionary(v => v.Key.ToLowerInvariant(), v =>
         {
             var propertyType = Properties.FirstOrDefault(x => x.Name.Equals(v.Key, StringComparison.OrdinalIgnoreCase))?.PropertyType;
-            var value = Functions.ReadValue(v.Value, propertyType);
+            var value = ReadValue(v.Value, propertyType);
 
             return value;
         });
@@ -52,24 +72,23 @@ public class ReflectionDetail<T> : IReflectionDetail
         {
             var valuesToGrab = parameters.IntersectBy(values.Keys, p => p.Name?.ToLowerInvariant());
 
-            if (ctr == null || ctr.Value.Parameters.Length < valuesToGrab.Count())
+            if (ctr != null && ctr.Value.Parameters.Length >= valuesToGrab.Count()) continue;
+
+            var parameterValues = new List<object?>();
+
+            foreach (var parameter in parameters)
             {
-                var parameterValues = new List<object?>();
+                var name = parameter.Name;
 
-                foreach (var parameter in parameters)
-                {
-                    var name = parameter.Name;
+                if (name == null)
+                    continue;
 
-                    if (name == null)
-                        continue;
+                name = name.ToLowerInvariant();
 
-                    name = name.ToLowerInvariant();
-
-                    parameterValues.Add(values.ContainsKey(name) ? values[name] : null);
-                }
-
-                ctr = (constructor, parameterValues.ToArray());
+                parameterValues.Add(values.ContainsKey(name) ? values[name] : null);
             }
+
+            ctr = (constructor, parameterValues.ToArray());
         }
 
         if (ctr == null)
@@ -87,24 +106,6 @@ public class ReflectionDetail<T> : IReflectionDetail
         }
 
         return doc;
-    }
-
-    public string PickId(T? value)
-    {
-        if (value == null)
-            return "";
-
-        var idProperty = Properties.FirstOrDefault(x => x.Name.Equals("Id", StringComparison.OrdinalIgnoreCase));
-
-        if (idProperty == null)
-            throw new InvalidOperationException($"Missing Id property on type {Type.FullName}");
-
-        var idValue = idProperty.GetValue(value);
-
-        if (idValue == null)
-            throw new InvalidOperationException($"Id property cannot be null on {Type.FullName}");
-
-        return idValue.ToString() ?? "";
     }
 
     public object? GetValueAsObject<TValue>(TValue value) =>
