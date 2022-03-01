@@ -28,7 +28,7 @@ internal class TableEntityService<T> : ITableEntityService<T>, ITableEntityServi
         if (!_uniqueStrategies.Any() && _details.IdKeyStrategy != null)
             _uniqueStrategies = new[] { _details.IdKeyStrategy };
 
-        if (_nonUniqueStrategies.Any())
+        if (!_nonUniqueStrategies.Any())
             _nonUniqueStrategies = new IKeyStrategy<T>[] { new ConstantKeyStrategy<T>(store.Configuration) };
 
         _defaultNonUniqueStrategy = _nonUniqueStrategies.First();
@@ -145,6 +145,14 @@ internal class TableEntityService<T> : ITableEntityService<T>, ITableEntityServi
         var expression = new PropertyKeyStrategy<T, TKeyValue>(keyProp, true);
 
         return Load(_defaultNonUniqueStrategy.GetKey(), expression.BuildKey(value), token);
+    }
+
+    public Task<T?> Load<TKeyValue, TPartitionValue>(Expression<Func<T, TKeyValue>> keyProp, TKeyValue keyValue, Expression<Func<T, TPartitionValue>> partitionProp, TPartitionValue partitionValue, CancellationToken token = default)
+    {
+        var keyStrategy = new PropertyKeyStrategy<T, TKeyValue>(keyProp, true);
+        var partitionStrategy = new PropertyKeyStrategy<T, TPartitionValue>(partitionProp, false);
+
+        return Load(partitionStrategy.BuildKey(partitionValue), keyStrategy.BuildKey(keyValue), token);
     }
 
     public void Store(T entity, CancellationToken token = default)

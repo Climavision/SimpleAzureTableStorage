@@ -14,6 +14,7 @@ public interface ITableEntityService<T>
     Task Delete(T entity, CancellationToken token = default);
     Task<T?> Load(string id, CancellationToken token = default);
     Task<T?> Load<TKeyValue>(Expression<Func<T, TKeyValue>> keyProp, TKeyValue value, CancellationToken token = default);
+    Task<T?> Load<TKeyValue, TPartitionValue>(Expression<Func<T, TKeyValue>> keyProp, TKeyValue keyValue, Expression<Func<T, TPartitionValue>> partitionProp, TPartitionValue partitionValue, CancellationToken token = default);
     void Store(T entity, CancellationToken token = default);
 
 }

@@ -41,8 +41,8 @@ public class AzureTableEntitySession : IEntitySession
     public async Task<T?> Load<T>(string id, string? rowKeyValue = null, CancellationToken token = default) where T : class =>
         await GetEntityService<T>().Load(id, token);
 
-    public Task<T?> Load<T, TKeyValue, TPartitionValue>(Expression<Func<T, TKeyValue>> prop, TKeyValue keyValue, Expression<Func<T, TPartitionValue>> partitionProp, TPartitionValue partitionValue, CancellationToken token = default) where T : class 
-        => throw new NotImplementedException();
+    public async Task<T?> Load<T, TKeyValue, TPartitionValue>(Expression<Func<T, TKeyValue>> keyProp, TKeyValue keyValue, Expression<Func<T, TPartitionValue>> partitionProp, TPartitionValue partitionValue, CancellationToken token = default) where T : class 
+        => await GetEntityService<T>().Load(keyProp, keyValue, partitionProp, partitionValue, token);
 
     public async Task<Dictionary<string, T?>> Load<T>(IEnumerable<string> ids, string? rowKeyValue = null, CancellationToken token = default) where T : class
     {

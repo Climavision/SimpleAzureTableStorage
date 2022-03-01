@@ -37,6 +37,12 @@ public interface IExpressionKeyStrategy<in T, in TValue> : IKeyStrategy<T>
     string BuildKey(TValue value);
 }
 
+public static class PropertyKeyStrategy
+{
+    public static PropertyKeyStrategy<TSubject, TProp> Of<TSubject, TProp>(Expression<Func<TSubject, TProp>> expression, bool isUniqueValue) => 
+        new(expression, isUniqueValue);
+}
+
 public class PropertyKeyStrategy<T, TValue> : IExpressionKeyStrategy<T, TValue>
 {
     private readonly Expression<Func<T, TValue>> _expression;
@@ -53,7 +59,7 @@ public class PropertyKeyStrategy<T, TValue> : IExpressionKeyStrategy<T, TValue>
     public bool IsUniqueValue { get; }
     public string KeyPrefix { get; }
 
-    public string GetKey(T entity)
+    public string GetKey(T? entity)
     {
         var value = _func(entity);
 
