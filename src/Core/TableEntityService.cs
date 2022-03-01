@@ -1,4 +1,5 @@
-﻿using Azure;
+﻿using System.Linq.Expressions;
+using Azure;
 using Azure.Data.Tables;
 using SimpleAzureTableStorage.Core.Exceptions;
 
@@ -10,11 +11,27 @@ internal class TableEntityService<T> : ITableEntityService<T>, ITableEntityServi
     private readonly ReflectionDetail<T> _details;
     private readonly Dictionary<(string partitionKey, string rowKey), CachedEntity<T>> _entitiesMap = new();
     private readonly AzureTableEntityStore _store;
+    private readonly IKeyStrategy<T>[] _uniqueStrategies;
+    private readonly IKeyStrategy<T>[] _nonUniqueStrategies;
+    private readonly IKeyStrategy<T> _defaultNonUniqueStrategy;
 
     public TableEntityService(AzureTableEntityStore store)
     {
         _store = store;
         _details = store.GetReflectionDetail<T>();
+        
+        var strategies = store.GetStrategies<T>().ToArray();
+
+        _uniqueStrategies = strategies.Where(x => x.IsUniqueValue).ToArray();
+        _nonUniqueStrategies = strategies.Where(x => !x.IsUniqueValue).ToArray();
+
+        if (!_uniqueStrategies.Any() && _details.IdKeyStrategy != null)
+            _uniqueStrategies = new[] { _details.IdKeyStrategy };
+
+        if (_nonUniqueStrategies.Any())
+            _nonUniqueStrategies = new IKeyStrategy<T>[] { new ConstantKeyStrategy<T>(store.Configuration) };
+
+        _defaultNonUniqueStrategy = _nonUniqueStrategies.First();
     }
 
     public async Task CommitChanges(bool failOnFirstException, CancellationToken token = default)
@@ -24,11 +41,10 @@ internal class TableEntityService<T> : ITableEntityService<T>, ITableEntityServi
         foreach (var cachedEntity in _entitiesMap.ToDictionary(x => x.Key, x => x.Value)) // TODO: Improve
         {
             var ((partitionKey, rowKey), (entity, eTag)) = cachedEntity;
-            var id = _details.PickId(entity);
-            var (tableEntity, currentEtag) = await GetItemFromTable(id, token);
+            var (tableEntity, currentEtag) = await GetItemFromTable(partitionKey, rowKey, token);
 
             if (!string.Equals(eTag, currentEtag))
-                throw new ConcurrencyException(_details.Type, _details.PickId(tableEntity), eTag, currentEtag);
+                throw new ConcurrencyException(_details.Type, rowKey, eTag, currentEtag);
 
             var values = _details.GetValues(entity);
 
@@ -52,10 +68,10 @@ internal class TableEntityService<T> : ITableEntityService<T>, ITableEntityServi
 
                 _entitiesMap.Remove((partitionKey, rowKey));
 
-                var (newEntity, newETag) = await GetItemFromTable(id, token);
+                var (newEntity, newETag) = await GetItemFromTable(partitionKey, rowKey, token);
 
                 if (newEntity != null)
-                    StartTracking(partitionKey, id, newEntity, newETag);
+                    StartTracking(newEntity, newETag);
             }
             catch (RequestFailedException failed)
             {
@@ -78,72 +94,100 @@ internal class TableEntityService<T> : ITableEntityService<T>, ITableEntityServi
         }
     }
 
-    public async Task Delete(T entity, CancellationToken token = default) =>
-        await Delete(_details.PickId(entity), token);
-
     public async Task Delete(string id, CancellationToken token = default)
     {
-        var tableClient = await _store.GetTableClient<T>();
-        var rowKey = _details.GenerateRowKey(id);
+        var entity = await Load(id, token);
 
-        await tableClient.DeleteEntityAsync("Root", rowKey, cancellationToken: token);
-
-        _entitiesMap.Remove(("Root", rowKey));
+        if (entity != null) 
+            await Delete(entity, token);
     }
 
-    public async Task<T?> Load(string id, CancellationToken token = default)
+    public async Task Delete(T entity, CancellationToken token = default)
+    {
+        var tableClient = await _store.GetTableClient<T>();
+
+        foreach (var nonUniqueStrategy in _nonUniqueStrategies)
+        {
+            foreach (var uniqueStrategy in _uniqueStrategies)
+            {
+                var rowKey = uniqueStrategy.GetKey(entity);
+                var partitionKey = nonUniqueStrategy.GetKey(entity);
+
+                await tableClient.DeleteEntityAsync(partitionKey, rowKey, cancellationToken: token);
+
+                _entitiesMap.Remove((partitionKey, rowKey));
+            }
+        }
+    }
+
+    public async Task<T?> Load(string id, CancellationToken token = default) => 
+        await Load(_defaultNonUniqueStrategy.GetKey(), id, token);
+
+    private async Task<T?> Load(string partitionKey, string rowKey, CancellationToken token = default)
     {
         // Check it exists in cache
-        var exists = _entitiesMap.TryGetValue(("Root", _details.GenerateRowKey(id)), out var current);
+        var exists = _entitiesMap.TryGetValue((partitionKey, rowKey), out var current);
 
         if (exists) return current?.Entity;
 
         // Load from table if not exists and store in cache
-        var (entity, eTag) = await GetItemFromTable(id, token);
+        var (entity, eTag) = await GetItemFromTable(partitionKey, rowKey, token);
 
         if (entity == null) return null;
 
-        StartTracking("Root", id, entity, eTag);
+        StartTracking(entity, eTag);
 
         return entity;
     }
 
-    public void Store(T entity, string id, CancellationToken token = default)
+    public Task<T?> Load<TKeyValue>(Expression<Func<T, TKeyValue>> keyProp, TKeyValue value, CancellationToken token = default)
     {
-        StartTracking("Root", id, entity);
+        var expression = new PropertyKeyStrategy<T, TKeyValue>(keyProp, true);
+
+        return Load(_defaultNonUniqueStrategy.GetKey(), expression.BuildKey(value), token);
     }
 
-    private bool Contains(string partitionKey, string id) =>
-        _entitiesMap.ContainsKey((partitionKey, _details.GenerateRowKey(id)));
-
-    private T StartTracking(string partitionKey, string id, T entity, string? eTag = null)
+    public void Store(T entity, CancellationToken token = default)
     {
-        var rowKey = _details.GenerateRowKey(id);
-        var exists = _entitiesMap.TryGetValue((partitionKey, rowKey), out var current);
+        StartTracking(entity);
+    }
 
-        switch (exists)
+    private T StartTracking(T entity, string? eTag = null)
+    {
+        foreach (var nonUniqueStrategy in _nonUniqueStrategies)
         {
-            case false:
-                _entitiesMap.Add((partitionKey, rowKey), new CachedEntity<T>(entity, eTag));
+            foreach (var uniqueStrategy in _uniqueStrategies)
+            {
+                var rowKey = uniqueStrategy.GetKey(entity);
+                var partitionKey = nonUniqueStrategy.GetKey(entity);
+                var exists = _entitiesMap.TryGetValue((partitionKey, rowKey), out var current);
 
-                return entity;
-            case true when entity == current?.Entity:
-                return current.Entity;
-            case true:
-                _entitiesMap.Remove((partitionKey, rowKey));
-                _entitiesMap.Add((partitionKey, rowKey), new CachedEntity<T>(entity, eTag));
-
-                return entity;
+                switch (exists)
+                {
+                    case false:
+                        _entitiesMap.Add((partitionKey, rowKey), new CachedEntity<T>(entity, eTag));
+                        
+                        break;
+                    case true when entity == current?.Entity:
+                        break;
+                    case true:
+                        _entitiesMap.Remove((partitionKey, rowKey));
+                        _entitiesMap.Add((partitionKey, rowKey), new CachedEntity<T>(entity, eTag));
+                        break;
+                }
+            }
         }
+
+        return entity;
     }
 
-    private async Task<(T? entity, string? ETag)> GetItemFromTable(string id, CancellationToken token = default)
+    private async Task<(T? entity, string? ETag)> GetItemFromTable(string partitionKey, string rowKey, CancellationToken token = default)
     {
         var tableClient = await _store.GetTableClient<T>();
 
         try
         {
-            var entityResponse = await tableClient.GetEntityAsync<TableEntity>("Root", _details.GenerateRowKey(id), cancellationToken: token);
+            var entityResponse = await tableClient.GetEntityAsync<TableEntity>(partitionKey, rowKey, cancellationToken: token);
 
             return (_details.LoadFrom(entityResponse.Value), entityResponse.Value.ETag.ToString());
         }

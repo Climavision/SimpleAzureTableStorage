@@ -8,5 +8,4 @@ public interface IReflectionDetail
     string PluralName { get; }
     PropertyInfo[] Properties { get; }
     Dictionary<ConstructorInfo, ParameterInfo[]> Constructors { get; }
-    string GenerateRowKey(string id);
 }
