@@ -71,7 +71,7 @@ internal class TableEntityService<T> : ITableEntityService<T>, ITableEntityServi
                 var (newEntity, newETag) = await GetItemFromTable(partitionKey, rowKey, token);
 
                 if (newEntity != null)
-                    StartTracking(newEntity, newETag);
+                    StartTracking(newEntity, rowKey, partitionKey, newETag);
             }
             catch (RequestFailedException failed)
             {
@@ -173,22 +173,30 @@ internal class TableEntityService<T> : ITableEntityService<T>, ITableEntityServi
             {
                 var rowKey = uniqueStrategy.GetKey(entity);
                 var partitionKey = nonUniqueStrategy.GetKey(entity);
-                var exists = _entitiesMap.TryGetValue((partitionKey, rowKey), out var current);
 
-                switch (exists)
-                {
-                    case false:
-                        _entitiesMap.Add((partitionKey, rowKey), new CachedEntity<T>(entity, eTag));
-                        
-                        break;
-                    case true when entity == current?.Entity:
-                        break;
-                    case true:
-                        _entitiesMap.Remove((partitionKey, rowKey));
-                        _entitiesMap.Add((partitionKey, rowKey), new CachedEntity<T>(entity, eTag));
-                        break;
-                }
+                StartTracking(entity, rowKey, partitionKey, eTag);
             }
+        }
+
+        return entity;
+    }
+
+    private T StartTracking(T entity, string rowKey, string partitionKey, string? eTag = null)
+    {
+        var exists = _entitiesMap.TryGetValue((partitionKey, rowKey), out var current);
+
+        switch (exists)
+        {
+            case false:
+                _entitiesMap.Add((partitionKey, rowKey), new CachedEntity<T>(entity, eTag));
+
+                break;
+            case true when entity == current?.Entity:
+                break;
+            case true:
+                _entitiesMap.Remove((partitionKey, rowKey));
+                _entitiesMap.Add((partitionKey, rowKey), new CachedEntity<T>(entity, eTag));
+                break;
         }
 
         return entity;
