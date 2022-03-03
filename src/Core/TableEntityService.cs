@@ -120,8 +120,13 @@ internal class TableEntityService<T> : ITableEntityService<T>, ITableEntityServi
         }
     }
 
-    public async Task<T?> Load(string id, CancellationToken token = default) => 
-        await Load(_defaultNonUniqueStrategy.GetKey(), id, token);
+    public async Task<T?> Load(string id, CancellationToken token = default)
+    {
+        var partitionKey = _defaultNonUniqueStrategy.GetKey();
+        var rowKey = $"{_details.IdKeyStrategy?.KeyPrefix}::{id}";
+
+        return await Load(partitionKey, rowKey, token);
+    }
 
     private async Task<T?> Load(string partitionKey, string rowKey, CancellationToken token = default)
     {
