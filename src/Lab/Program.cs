@@ -1,37 +1,44 @@
 ﻿using System.Diagnostics;
+using Azure.Data.Tables;
 using Lab;
 using SimpleAzureTableStorage.Core;
 
 var connectionString = "AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;DefaultEndpointsProtocol=http;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;";
-var strategies = new IKeyStrategy[]
+var shouldClose = false;
+
+while (!shouldClose)
 {
-    PropertyKeyStrategy.Of<User, string>(x => x.Id, true),
-    new PropertyKeyStrategy<User, string>(x => x.Email, true)
-};
-var stopwatch = new Stopwatch();
-stopwatch.Start();
-var store = new AzureTableEntityStore(new StoreConfiguration
-{
-    ConnectionString = connectionString,
-    Schema = "Lab"
-}, strategies);
-Console.WriteLine($"StoreCreated: {stopwatch.ElapsedMilliseconds}");
-var session = store.OpenSession();
-Console.WriteLine($"SessionOpened: {stopwatch.ElapsedMilliseconds}");
+    Console.WriteLine("What test do you want to run?");
+    Console.WriteLine();
+    Console.WriteLine("1: Dual unique keys");
+    Console.WriteLine("2: Dual non-unique keys");
+    Console.WriteLine();
+    Console.Write("choice: ");
+    var choice = Console.ReadLine();
 
-//session.Store(new User { Company = "CompanyABC", Email = "dale@testdomain.com", Id = "fc069198-cf96-4f94-8512-f8f3265402a1", Name = "Dale" });
-//await session.SaveChanges();
+    switch (choice)
+    {
+        case "0":
+            var _client = new TableServiceClient(connectionString);
+            var tables = _client.Query("TableName ge 'Lab' and TableName le 'Labzzzzzzzzz'");
 
+            foreach (var table in tables)
+            {
+                Console.WriteLine($"Deleting table: {table.Name}");
+                await _client.DeleteTableAsync(table.Name);
+            }
 
+            break;
+        case "1":
+            await UniqueKeyStrategyTesting.Run(connectionString);
 
-var byEmail = await session.Load<User, string>(x => x.Email, "dale@testdomain.com");
-Console.WriteLine($"LoadByEmail: {stopwatch.ElapsedMilliseconds}");
+            break;
+        case "2":
+            await NonUniqueKeyStrategyTesting.Run(connectionString);
 
-//var byId = await session.Load<User, string, string>(x => x.Id, "fc069198-cf96-4f94-8512-f8f3265402a1", x => x.Company, "CompanyABC");
-//Console.WriteLine($"LoadById: {stopwatch.ElapsedMilliseconds}");
-
-await session.Delete(byEmail);
-Console.WriteLine($"Deleted: {stopwatch.ElapsedMilliseconds}");
-
-
-//stopwatch.Stop();
+            break;
+        default:
+            shouldClose = true;
+            break;
+    }
+}
