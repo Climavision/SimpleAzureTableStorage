@@ -16,7 +16,7 @@ public interface IKeyStrategy<in T> : IKeyStrategy
     string GetKey(T? entity = default);
 }
 
-class ConstantKeyStrategy<T> : IKeyStrategy<T>
+public class ConstantKeyStrategy<T> : IKeyStrategy<T>
 {
     private readonly IStoreConfiguration _configuration;
 
@@ -25,7 +25,7 @@ class ConstantKeyStrategy<T> : IKeyStrategy<T>
         _configuration = configuration;
     }
 
-    public string GetKey(T entity) => 
+    public string GetKey(T? entity) => 
         _configuration.DefaultPartitionKey;
 
     public bool IsUniqueValue => false;

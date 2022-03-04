@@ -51,3 +51,25 @@ public static class NonUniqueKeyStrategyTesting
         await session.SaveChanges();
     }
 }
+public static class SingleUniqueSingleNonUnique
+{
+    public static async Task Run(string connectionString)
+    {
+        var strategies = new IKeyStrategy[]
+        {
+            new PropertyKeyStrategy<Assignment, string>(x => x.Id, true),
+            new PropertyKeyStrategy<Assignment, string>(x => x.OrganizationId, false),
+        };
+        var store = new AzureTableEntityStore(new StoreConfiguration
+        {
+            ConnectionString = connectionString,
+            Schema = "Lab"
+        }, strategies);
+        var session = store.OpenSession();
+
+        session.Store(new Assignment("2b4466cc-4775-4825-9840-dec5733bd359", "ABC123", "EMP-001", DateTime.Now));
+
+        await session.SaveChanges();
+        await session.SaveChanges();
+    }
+}

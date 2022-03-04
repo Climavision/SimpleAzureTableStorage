@@ -12,6 +12,7 @@ while (!shouldClose)
     Console.WriteLine();
     Console.WriteLine("1: Dual unique keys");
     Console.WriteLine("2: Dual non-unique keys");
+    Console.WriteLine("3: Single unique and single non-unique keys");
     Console.WriteLine();
     Console.Write("choice: ");
     var choice = Console.ReadLine();
@@ -35,6 +36,10 @@ while (!shouldClose)
             break;
         case "2":
             await NonUniqueKeyStrategyTesting.Run(connectionString);
+
+            break;
+        case "3":
+            await SingleUniqueSingleNonUnique.Run(connectionString);
 
             break;
         default:
