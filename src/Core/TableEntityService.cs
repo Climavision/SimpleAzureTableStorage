@@ -1,4 +1,5 @@
-﻿using System.Linq.Expressions;
+﻿using System.Linq;
+using System.Linq.Expressions;
 using Azure;
 using Azure.Data.Tables;
 using SimpleAzureTableStorage.Core.Exceptions;
@@ -120,12 +121,24 @@ internal class TableEntityService<T> : ITableEntityService<T>, ITableEntityServi
         }
     }
 
+    // TODO: Work on the thought behind this logic
     public async Task<T?> Load(string id, CancellationToken token = default)
     {
-        var partitionKey = _defaultNonUniqueStrategy.GetKey();
         var rowKey = $"{_details.IdKeyStrategy?.KeyPrefix}::{id}";
+        var client = await _store.GetTableClient<T>();
+        var query = $"RowKey eq '{rowKey}'";
 
-        return await Load(partitionKey, rowKey, token);
+        if (_defaultNonUniqueStrategy is ConstantKeyStrategy<T> strategy)
+            query = $"PartitionKey eq '{strategy.GetKey(default)}' and {query}";
+        else
+            query = $"(PartitionKey ge '{_defaultNonUniqueStrategy.KeyPrefix}' and PartitionKey le '{_defaultNonUniqueStrategy.KeyPrefix}zzzzzzzzzz') and {query}";
+        
+        var result = client.Query<TableEntity>(query).DistinctBy(x => x.RowKey).ToList();
+
+        if (result.Count != 1)
+            throw new InvalidOperationException("Inconsistent state across records with the same RowKey");
+
+        return await Load(result.First().PartitionKey, result.First().RowKey, token);
     }
 
     private async Task<T?> Load(string partitionKey, string rowKey, CancellationToken token = default)
@@ -140,7 +153,7 @@ internal class TableEntityService<T> : ITableEntityService<T>, ITableEntityServi
 
         if (entity == null) return null;
 
-        StartTracking(entity, eTag);
+        StartTracking(entity, rowKey, partitionKey, eTag);
 
         return entity;
     }
