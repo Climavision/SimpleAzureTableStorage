@@ -61,7 +61,7 @@ public class AzureTableEntitySession : IEntitySession
     {
         var expression = new PropertyKeyStrategy<T, TPartitionValue>(partitionProp, false);
 
-        return Query<T>($"PartitionKey eq '{expression.BuildKey(value)}'");
+        return Query<T>($"PartitionKey eq '{expression.BuildKey(value)}'").Distinct();
     }
 
     private TableEntityService<T> GetEntityService<T>() where T : class

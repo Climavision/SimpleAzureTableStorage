@@ -14,6 +14,7 @@ public interface IKeyStrategy
 public interface IKeyStrategy<in T> : IKeyStrategy
 {
     string GetKey(T? entity = default);
+    string GetValue(T? entity = default);
 }
 
 public class ConstantKeyStrategy<T> : IKeyStrategy<T>
@@ -26,6 +27,9 @@ public class ConstantKeyStrategy<T> : IKeyStrategy<T>
     }
 
     public string GetKey(T? entity) => 
+        _configuration.DefaultPartitionKey;
+
+    public string GetValue(T? entity = default) => 
         _configuration.DefaultPartitionKey;
 
     public bool IsUniqueValue => false;
@@ -68,6 +72,9 @@ public class PropertyKeyStrategy<T, TValue> : IExpressionKeyStrategy<T, TValue>
 
         return BuildKey(value);
     }
+
+    public string GetValue(T? entity = default) => 
+        _func(entity)?.ToString() ?? "";
 
     public string BuildKey(TValue value) =>
         $"{KeyPrefix}::{value}"; // TODO: Set up specific type conversions to string to improve query performance
