@@ -158,7 +158,7 @@ public class AzureTableEntityStore : IEntityStore
 
         if (current == null)
             await _client.CreateTableIfNotExistsAsync(detail.TableName);
-
+        
         var tableClient = _client.GetTableClient(detail.TableName);
 
         _tableClients.TryAdd(detail.Type, tableClient);

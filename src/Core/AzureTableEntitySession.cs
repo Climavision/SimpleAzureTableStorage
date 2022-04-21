@@ -32,7 +32,7 @@ public class AzureTableEntitySession : IEntitySession
         var entityServices = _entityServices.Values.ToList();
 
         foreach (var service in entityServices)
-            await service.CommitChanges(false, token);
+            await service.CommitChanges(false, token).ConfigureAwait(false);
     }
 
     public void Store<T>(T entity, CancellationToken token = default) where T : class =>
