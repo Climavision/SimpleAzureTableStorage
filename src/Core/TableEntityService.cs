@@ -43,6 +43,8 @@ internal class TableEntityService<T> : ITableEntityService<T>, ITableEntityServi
         var inTable = await GetItemsByQuery(check);
         var tableClient = await _store.GetTableClient<T>();
 
+        var changedKeys = new List<(string partitionKey, string rowKey)>();
+
         foreach (var partitionKeySet in _entitiesMap.GroupBy(x => x.Key.partitionKey)) // TODO: Improve
         {
             var batch = new Dictionary<(string partitionKey, string rowKey), TableEntity>();
@@ -73,7 +75,7 @@ internal class TableEntityService<T> : ITableEntityService<T>, ITableEntityServi
             }
 
             // Create the batch.
-            var addEntitiesBatch = batch.Values.Select(e => new TableTransactionAction(TableTransactionActionType.Add, e)).ToList();
+            var addEntitiesBatch = batch.Values.Select(e => new TableTransactionAction(TableTransactionActionType.UpsertMerge, e)).ToList();
 
             if (!addEntitiesBatch.Any()) continue;
 
@@ -85,15 +87,7 @@ internal class TableEntityService<T> : ITableEntityService<T>, ITableEntityServi
                 if (raw.Status != 202)
                     throw new Exception("An issue with the batch insert has occurred");
 
-                var partitionCheck = string.Join(" or ", batch.Keys.Select((item) => $"(PartitionKey eq '{item.partitionKey}' and RowKey eq '{item.rowKey}')"));
-                var newBatchItems = await GetItemsByQuery(check);
-
-                foreach (var ((partitionKey, rowKey), entity) in newBatchItems)
-                {
-                    _entitiesMap.Remove((partitionKey, rowKey));
-
-                    StartTracking(entity.Entity, rowKey, partitionKey, entity.ETag);
-                }
+                changedKeys.AddRange(batch.Keys);
             }
             catch (RequestFailedException failed)
             {
@@ -111,6 +105,16 @@ internal class TableEntityService<T> : ITableEntityService<T>, ITableEntityServi
 
                 exceptions.Add(exception);
             }
+        }
+
+        var partitionCheck = string.Join(" or ", changedKeys.Select((item) => $"(PartitionKey eq '{item.partitionKey}' and RowKey eq '{item.rowKey}')"));
+        var newBatchItems = await GetItemsByQuery(check);
+
+        foreach (var ((partitionKey, rowKey), entity) in newBatchItems)
+        {
+            _entitiesMap.Remove((partitionKey, rowKey));
+
+            StartTracking(entity.Entity, rowKey, partitionKey, entity.ETag);
         }
 
         if (exceptions.Any()) throw new AggregateException(exceptions);
