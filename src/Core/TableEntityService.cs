@@ -20,7 +20,7 @@ internal class TableEntityService<T> : ITableEntityService<T>, ITableEntityServi
     {
         _store = store;
         _details = store.GetReflectionDetail<T>();
-        
+
         var strategies = store.GetStrategies<T>().ToArray();
 
         _uniqueStrategies = strategies.Where(x => x.IsUniqueValue).ToArray();
@@ -38,41 +38,56 @@ internal class TableEntityService<T> : ITableEntityService<T>, ITableEntityServi
     public async Task CommitChanges(bool failOnFirstException, CancellationToken token = default)
     {
         var exceptions = new List<Exception>();
+        var check = string.Join(" or ", _entitiesMap.Keys
+            .Select((key) => $"(PartitionKey eq '{key.partitionKey}' and RowKey eq '{key.rowKey}')"));
+        var inTable = await GetItemsByQuery(check);
+        var tableClient = await _store.GetTableClient<T>();
 
-        foreach (var cachedEntity in _entitiesMap.ToDictionary(x => x.Key, x => x.Value)) // TODO: Improve
+        var changedKeys = new List<(string partitionKey, string rowKey)>();
+
+        foreach (var partitionKeySet in _entitiesMap.GroupBy(x => x.Key.partitionKey)) // TODO: Improve
         {
-            var ((partitionKey, rowKey), (entity, eTag)) = cachedEntity;
-            var (tableEntity, currentEtag) = await GetItemFromTable(partitionKey, rowKey, token);
+            var batch = new Dictionary<(string partitionKey, string rowKey), TableEntity>();
 
-            if (!string.Equals(eTag, currentEtag))
-                throw new ConcurrencyException(_details.Type, rowKey, eTag, currentEtag);
-
-            var values = _details.GetValues(entity);
-
-            // Check for changes
-            if (tableEntity != null)
+            foreach (var (key, (entity, eTag)) in partitionKeySet)
             {
-                var storedValues = _details.GetValues(tableEntity);
+                var (partitionKey, rowKey) = key;
+                var (tableEntity, currentEtag) = inTable.ContainsKey(key) ? inTable[(partitionKey, rowKey)] : new CachedEntity<T?>(null, null);
 
-                if (!values.Except(storedValues).Any()) // No changes detected. TODO: improve
-                    continue;
+                if (!string.Equals(eTag, currentEtag))
+                    throw new ConcurrencyException(_details.Type, rowKey, eTag, currentEtag);
+
+                var values = _details.GetValues(entity);
+
+                // Check for changes
+                if (tableEntity != null)
+                {
+                    var storedValues = _details.GetValues(tableEntity);
+
+                    if (!values.Except(storedValues).Any()) // No changes detected. TODO: improve
+                        continue;
+                }
+
+                values.Add("PartitionKey", partitionKey);
+                values.Add("RowKey", rowKey);
+
+                batch.Add((partitionKey, rowKey), new TableEntity(values));
             }
 
-            var tableClient = await _store.GetTableClient<T>();
+            // Create the batch.
+            var addEntitiesBatch = batch.Values.Select(e => new TableTransactionAction(TableTransactionActionType.UpsertMerge, e)).ToList();
 
-            values.Add("PartitionKey", partitionKey);
-            values.Add("RowKey", rowKey);
+            if (!addEntitiesBatch.Any()) continue;
 
             try
             {
-                var response = await tableClient.UpsertEntityAsync(new TableEntity(values), cancellationToken: token);
+                var response = await tableClient.SubmitTransactionAsync(addEntitiesBatch).ConfigureAwait(false);
+                var raw = response.GetRawResponse();
 
-                _entitiesMap.Remove((partitionKey, rowKey));
+                if (raw.Status != 202)
+                    throw new Exception("An issue with the batch insert has occurred");
 
-                var (newEntity, newETag) = await GetItemFromTable(partitionKey, rowKey, token);
-
-                if (newEntity != null)
-                    StartTracking(newEntity, rowKey, partitionKey, newETag);
+                changedKeys.AddRange(batch.Keys);
             }
             catch (RequestFailedException failed)
             {
@@ -90,16 +105,26 @@ internal class TableEntityService<T> : ITableEntityService<T>, ITableEntityServi
 
                 exceptions.Add(exception);
             }
-
-            if (exceptions.Any()) throw new AggregateException(exceptions);
         }
+
+        var partitionCheck = string.Join(" or ", changedKeys.Select((item) => $"(PartitionKey eq '{item.partitionKey}' and RowKey eq '{item.rowKey}')"));
+        var newBatchItems = await GetItemsByQuery(check);
+
+        foreach (var ((partitionKey, rowKey), entity) in newBatchItems)
+        {
+            _entitiesMap.Remove((partitionKey, rowKey));
+
+            StartTracking(entity.Entity, rowKey, partitionKey, entity.ETag);
+        }
+
+        if (exceptions.Any()) throw new AggregateException(exceptions);
     }
 
     public async Task Delete(string id, CancellationToken token = default)
     {
         var entity = await Load(id, token);
 
-        if (entity != null) 
+        if (entity != null)
             await Delete(entity, token);
     }
 
@@ -132,7 +157,7 @@ internal class TableEntityService<T> : ITableEntityService<T>, ITableEntityServi
             query = $"PartitionKey eq '{strategy.GetKey(default)}' and {query}";
         else
             query = $"(PartitionKey ge '{_defaultNonUniqueStrategy.KeyPrefix}' and PartitionKey le '{_defaultNonUniqueStrategy.KeyPrefix}zzzzzzzzzz') and {query}";
-        
+
         var result = client.Query<TableEntity>(query).DistinctBy(x => x.RowKey).ToList();
 
         if (result.Count != 1)
@@ -229,5 +254,19 @@ internal class TableEntityService<T> : ITableEntityService<T>, ITableEntityServi
         {
             return (default, null);
         }
+    }
+
+    private async Task<Dictionary<(string partitionKey, string rowKey), CachedEntity<T>>> GetItemsByQuery(string query, CancellationToken token = default)
+    {
+        var tableClient = await _store.GetTableClient<T>();
+        var entities = tableClient.QueryAsync<TableEntity>(query, cancellationToken: token);
+        var result = new Dictionary<(string partitionKey, string rowKey), CachedEntity<T>>();
+
+        await foreach (var entity in entities)
+        {
+            result.Add((entity.PartitionKey, entity.RowKey), new CachedEntity<T>(_details.LoadFrom(entity), entity.ETag.ToString()));
+        }
+
+        return result;
     }
 }
